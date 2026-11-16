@@ -1,0 +1,29 @@
+I want to create a Point of Sales app. 
+The app should be free and will be use by associations
+
+I want to use a Google drive account as storage.
+One spreadsheet to store the configuration (products, categories) = pos-config
+One spreadsheet per event = event-<start date>
+
+pos-config should contain the following informations:
+- One sheet per product category
+- For each product: Name, sale price, buy price, color, position on the grid
+
+event-date contains: 
+- sheet 1: the sales of the event with one line per order with each products quantity and the amount of the order
+- sheet 2: list of the products used during the event with summed quantity, amounts, margings
+The idea is to have directly the result of the event at the end without edit manually the spreadsheet
+
+
+About the UI
+- Home screen=5 button: 
+	- Take order
+	- Edit buttons
+	- Order history
+	- Settings
+	- Export: Sync with google account
+
+
+
+
+
