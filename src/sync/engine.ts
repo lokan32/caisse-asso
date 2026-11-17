@@ -7,19 +7,23 @@ export interface SyncState {
   status: SyncStatus;
   error?: string;
   lastSuccessAt?: number;
-  /** Spreadsheet ids written by the last pass. */
+  /** Event spreadsheet id written by the last pass. */
   lastEventFileId?: string;
-  lastConfigFileId?: string;
-  /** Set when an existing pos-config needs a decision (import or replace). */
-  configConflict?: string;
+  /** Event types whose existing pos-config-<type> needs a decision (import or replace). */
+  configConflicts: ConfigConflict[];
+}
+
+export interface ConfigConflict {
+  typeId: string;
+  fileId: string;
 }
 
 export interface EngineDeps {
   /** null when no Google account is connected; throws AuthError when it must reconnect. */
   getApi(): Promise<GoogleApi | null>;
   isOnline(): boolean;
-  dirty(): Promise<{ catalog: boolean; events: { id: string }[] }>;
-  syncCatalog(api: GoogleApi): Promise<string>;
+  dirty(): Promise<{ catalogTypes: string[]; events: { id: string }[] }>;
+  syncCatalog(api: GoogleApi, typeId: string): Promise<string>;
   syncEvent(api: GoogleApi, eventId: string): Promise<string>;
   activeEventId(): Promise<string | null>;
   onAuthError(): Promise<void>;
@@ -40,7 +44,10 @@ export interface SyncResult {
  */
 export function createSyncEngine(deps: EngineDeps) {
   const debounceMs = deps.debounceMs ?? 5000;
-  let state: SyncState = { status: 'idle' };
+  let state: SyncState = { status: 'idle', configConflicts: [] };
+  const withoutConflict = (typeId: string) =>
+    state.configConflicts.filter((c) => c.typeId !== typeId);
+  const inConflict = (typeId: string) => state.configConflicts.some((c) => c.typeId === typeId);
   const listeners = new Set<(s: SyncState) => void>();
   let running: Promise<SyncResult> | null = null;
   let rerun = false;
@@ -82,12 +89,16 @@ export function createSyncEngine(deps: EngineDeps) {
     setState({ status: 'syncing', error: undefined });
     try {
       const dirty = await deps.dirty();
-      if (dirty.catalog) {
+      for (const typeId of dirty.catalogTypes) {
         try {
-          setState({ lastConfigFileId: await deps.syncCatalog(api), configConflict: undefined });
+          await deps.syncCatalog(api, typeId);
+          setState({ configConflicts: withoutConflict(typeId) });
         } catch (e) {
           if (!(e instanceof ConfigConflictError)) throw e;
-          setState({ configConflict: e.fileId });
+          // A conflict blocks only its own type.
+          setState({
+            configConflicts: [...withoutConflict(typeId), { typeId, fileId: e.fileId }],
+          });
         }
       }
       const active = await deps.activeEventId();
@@ -99,7 +110,8 @@ export function createSyncEngine(deps: EngineDeps) {
       setState({ status: 'ok', lastSuccessAt: Date.now() });
       // Something changed during the upload: go again.
       const after = await deps.dirty();
-      if ((after.catalog && !state.configConflict) || after.events.length) schedule(debounceMs);
+      if (after.catalogTypes.some((t) => !inConflict(t)) || after.events.length)
+        schedule(debounceMs);
       return { ok: true, status: 'ok' };
     } catch (e) {
       if (e instanceof AuthError) {
@@ -146,7 +158,9 @@ export function createSyncEngine(deps: EngineDeps) {
     },
     syncNow,
     getState: () => state,
-    clearConflict: () => setState({ configConflict: undefined }),
+    /** Forget the conflict of one type, or all of them. */
+    clearConflict: (typeId?: string) =>
+      setState({ configConflicts: typeId ? withoutConflict(typeId) : [] }),
     subscribe(l: (s: SyncState) => void) {
       listeners.add(l);
       l(state);

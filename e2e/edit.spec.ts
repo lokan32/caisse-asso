@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { createType, setPrice, startEvent } from './helpers';
 
 test('fresh install shows the example catalog', async ({ page }) => {
   await page.goto('/#/edit');
@@ -67,4 +68,17 @@ test('deleting a non-empty category asks for confirmation', async ({ page }) => 
   await page.getByTestId('delete-category').click();
   await page.getByTestId('confirm-ok').click();
   await expect(page.getByRole('tab', { name: 'Nourriture' })).toHaveCount(0);
+});
+
+test('edit another type without changing the order screen', async ({ page }) => {
+  await createType(page, 'Kermesse', 'Général');
+  await startEvent(page, { type: 'Général' });
+  // Defaults to the active event's type.
+  await page.goto('/#/edit');
+  await expect(page.getByTestId('edit-type').locator('option:checked')).toHaveText('Général');
+  await setPrice(page, 'Kermesse', 'Café', '2');
+  await expect(page).toHaveURL(/#\/edit\?type=/);
+  await expect(page.getByTestId('product-Café')).toContainText('2,00');
+  await page.goto('/#/order');
+  await expect(page.getByTestId('product-Café')).toContainText('1,50');
 });

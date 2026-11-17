@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { mockGoogle } from './google-mock';
-import { setChangeStep, startEvent, tap } from './helpers';
+import { createType, setChangeStep, startEvent, tap } from './helpers';
 
 // Google requests are intercepted at page level; keep the service worker out of the way.
 test.use({ serviceWorkers: 'block' });
@@ -48,7 +48,7 @@ test('offline orders are synced when the connection returns', async ({ page, con
   expect(rows).toHaveLength(16);
   expect(rows.slice(1).map((r) => r[0])).toEqual(Array.from({ length: 15 }, (_, i) => i + 1));
   expect(fake.sheetValues(eventFile.name, 'Synthèse')[1].slice(1, 4)).toEqual(['Bière', 15, 37.5]);
-  expect(fake.sheetTitles('pos-config')).toEqual(['Boissons', 'Nourriture']);
+  expect(fake.sheetTitles('pos-config-Général')).toEqual(['Boissons', 'Nourriture']);
 
   // Manual sync from the Export screen reports success and links to the spreadsheet.
   await page.goto('/#/export');
@@ -101,6 +101,7 @@ test('import the catalog from pos-config', async ({ page, context }) => {
   await page.getByTestId('confirm-ok').click();
   await expect(page.getByTestId('import-result')).toContainText('1 produit(s) importé(s)');
   await expect(page.getByTestId('import-result')).toContainText('Bar, ligne 3');
+  await expect(page.getByTestId('import-result')).toContainText('Types : Général');
   await page.goto('/#/edit');
   await expect(page.getByRole('tab', { name: 'Bar' })).toBeVisible();
   await expect(page.getByRole('tab', { name: 'Boissons' })).toHaveCount(0);
@@ -125,6 +126,41 @@ test('replace an existing pos-config with this device catalog', async ({ page, c
   await page.getByTestId('replace-remote').click();
   await page.getByTestId('confirm-ok').click();
   await expect(page.getByTestId('sync-result')).toHaveText('Synchronisation réussie');
-  expect(fake.sheetTitles('pos-config')).toEqual(['Boissons', 'Nourriture']);
-  expect([...fake.files.values()].filter((f) => f.name === 'pos-config')).toHaveLength(1);
+  // The existing file is reused and renamed after the type, not duplicated.
+  expect(fake.sheetTitles('pos-config-Général')).toEqual(['Boissons', 'Nourriture']);
+  expect([...fake.files.values()].filter((f) => f.appProperties.posApp === 'config')).toHaveLength(
+    1,
+  );
+});
+
+test('one pos-config spreadsheet per event type, renamed with its type', async ({
+  page,
+  context,
+}) => {
+  const fake = await mockGoogle(context);
+  await createType(page, 'Kermesse', 'Général');
+  await connect(page);
+  await page.goto('/#/export');
+  await page.getByTestId('sync-now').click();
+  await expect(page.getByTestId('sync-result')).toHaveText('Synchronisation réussie');
+  const configNames = () =>
+    [...fake.files.values()]
+      .filter((f) => f.appProperties.posApp === 'config')
+      .map((f) => f.name)
+      .sort();
+  expect(configNames()).toEqual(['pos-config-Général', 'pos-config-Kermesse']);
+  await expect(page.getByTestId('config-link')).toHaveCount(2);
+
+  await page.goto('/#/settings');
+  await page
+    .getByTestId('type-item')
+    .filter({ hasText: 'Kermesse' })
+    .getByTestId('rename-type')
+    .click();
+  await page.getByLabel('Nom du type').fill('Fête');
+  await page.getByTestId('save-type').click();
+  await page.goto('/#/export');
+  await page.getByTestId('sync-now').click();
+  await expect(page.getByTestId('sync-result')).toHaveText('Synchronisation réussie');
+  expect(configNames()).toEqual(['pos-config-Fête', 'pos-config-Général']);
 });

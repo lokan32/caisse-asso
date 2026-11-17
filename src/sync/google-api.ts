@@ -21,11 +21,15 @@ export class ApiError extends Error {
 }
 
 /**
- * A pos-config already exists in Drive and this device never synced with it:
+ * A configuration spreadsheet with the type's name already exists in Drive and this
+ * device never synced with it:
  * the user must choose between importing it and replacing it.
  */
 export class ConfigConflictError extends Error {
-  constructor(public fileId: string) {
+  constructor(
+    public fileId: string,
+    public typeId: string,
+  ) {
     super('Un fichier pos-config existe déjà');
   }
 }
@@ -92,6 +96,18 @@ export class GoogleApi {
     appProperties?: Record<string, string>;
   }): Promise<DriveFile> {
     return this.call<DriveFile>('POST', `${DRIVE}/files?fields=id,name,appProperties`, meta);
+  }
+
+  /** Rename a file and/or set app properties (merged with the existing ones). */
+  async updateFile(
+    id: string,
+    meta: { name?: string; appProperties?: Record<string, string> },
+  ): Promise<DriveFile> {
+    return this.call<DriveFile>(
+      'PATCH',
+      `${DRIVE}/files/${encodeURIComponent(id)}?fields=id,name,appProperties`,
+      meta,
+    );
   }
 
   /* ---------- Sheets ---------- */

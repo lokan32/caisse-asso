@@ -69,18 +69,26 @@ export class FakeGoogle {
     sh.values[row][col] = value;
   }
 
-  /** Create a pos-config as if made by the app on another device. */
-  seedConfig(tabs: { title: string; rows: Cell[][] }[]) {
-    const folder = this.createFile({
-      name: 'POS',
-      mimeType: 'application/vnd.google-apps.folder',
-      appProperties: { posApp: 'folder' },
-    });
+  /**
+   * Create a configuration spreadsheet as if made by the app on another device
+   * (default: a legacy `pos-config` without type id).
+   */
+  seedConfig(
+    tabs: { title: string; rows: Cell[][] }[],
+    opts: { name?: string; typeId?: string } = {},
+  ) {
+    const folder =
+      [...this.files.values()].find((f) => f.appProperties.posApp === 'folder') ??
+      this.createFile({
+        name: 'POS',
+        mimeType: 'application/vnd.google-apps.folder',
+        appProperties: { posApp: 'folder' },
+      });
     const f = this.createFile({
-      name: 'pos-config',
+      name: opts.name ?? 'pos-config',
       mimeType: 'application/vnd.google-apps.spreadsheet',
       parents: [folder.id],
-      appProperties: { posApp: 'config' },
+      appProperties: { posApp: 'config', ...(opts.typeId ? { typeId: opts.typeId } : {}) },
     });
     f.sheets = tabs.map((t, i) => ({
       sheetId: this.nextSheetId++,
@@ -117,6 +125,15 @@ export class FakeGoogle {
         return { status: 200, json: { files: this.query(url.searchParams.get('q') ?? '') } };
       if (path === '/drive/v3/files' && method === 'POST') {
         const f = this.createFile(body as Partial<FakeFile> & { name: string; mimeType: string });
+        return { status: 200, json: { id: f.id, name: f.name, appProperties: f.appProperties } };
+      }
+      const fm = /^\/drive\/v3\/files\/([^/]+)$/.exec(path);
+      if (fm && method === 'PATCH') {
+        const f = this.files.get(decodeURIComponent(fm[1]));
+        if (!f) return { status: 404, json: { error: { message: 'File not found' } } };
+        const meta = (body ?? {}) as { name?: string; appProperties?: Record<string, string> };
+        if (meta.name !== undefined) f.name = meta.name;
+        if (meta.appProperties) f.appProperties = { ...f.appProperties, ...meta.appProperties };
         return { status: 200, json: { id: f.id, name: f.name, appProperties: f.appProperties } };
       }
     }

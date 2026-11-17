@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
-import { freshDb } from '../db/testing';
+import { TEST_TYPE_ID, freshDb } from '../db/testing';
 import { FakeGoogle } from './testing/fake-google';
 import { AuthError, GoogleApi } from './google-api';
 import { createSyncEngine, type EngineDeps } from './engine';
@@ -7,6 +7,8 @@ import { dirtyItems, syncCatalog, syncEvent } from './sync-ops';
 import { startEvent } from '../db/events';
 import { pendingOrdersCount, recordOrder } from '../db/orders';
 import { db } from '../db/db';
+import { addCategory, markCatalogDirty } from '../db/catalog';
+import { createEventType } from '../db/event-types';
 import type { OrderLine } from '../db/types';
 
 const beer: OrderLine = {
@@ -54,7 +56,7 @@ const commandesRows = () => fake.sheetValues('event-2026-11-21', 'Commandes').sl
 
 describe('sync engine', () => {
   test('offline: nothing is sent, orders stay pending; back online: all synced', async () => {
-    const e = await startEvent({ startDate: '2026-11-21' });
+    const e = await startEvent({ typeId: TEST_TYPE_ID, startDate: '2026-11-21' });
     for (let i = 0; i < 15; i++) await recordOrder(e.id, [beer]);
     online = false;
     const s = engine();
@@ -67,7 +69,7 @@ describe('sync engine', () => {
   });
 
   test('a revision change during upload keeps the event dirty and schedules another pass', async () => {
-    const e = await startEvent({ startDate: '2026-11-21' });
+    const e = await startEvent({ typeId: TEST_TYPE_ID, startDate: '2026-11-21' });
     await recordOrder(e.id, [beer]);
     const s = engine({
       syncEvent: async (api, id) => {
@@ -100,7 +102,7 @@ describe('sync engine', () => {
   });
 
   test('retry after a failure in the middle of a sync: no duplicates, nothing lost', async () => {
-    const e = await startEvent({ startDate: '2026-11-21' });
+    const e = await startEvent({ typeId: TEST_TYPE_ID, startDate: '2026-11-21' });
     for (let i = 0; i < 10; i++) await recordOrder(e.id, [beer]);
     const s = engine();
     // Let the spreadsheet be created, then fail during the write.
@@ -119,7 +121,7 @@ describe('sync engine', () => {
   });
 
   test('auth errors ask the user to reconnect and keep data', async () => {
-    const e = await startEvent({ startDate: '2026-11-21' });
+    const e = await startEvent({ typeId: TEST_TYPE_ID, startDate: '2026-11-21' });
     await recordOrder(e.id, [beer]);
     const onAuthError = vi.fn(async () => {});
     const s = engine({ getApi: async () => new GoogleApi('expired', fake.fetch), onAuthError });
@@ -132,16 +134,30 @@ describe('sync engine', () => {
   });
 
   test('an existing pos-config raises a conflict but events still sync', async () => {
-    fake.seedConfig([{ title: 'Autre appareil', rows: [['ID']] }]);
-    const e = await startEvent({ startDate: '2026-11-21' });
+    const f = fake.seedConfig([{ title: 'Autre appareil', rows: [['ID']] }]);
+    const e = await startEvent({ typeId: TEST_TYPE_ID, startDate: '2026-11-21' });
     await recordOrder(e.id, [beer]);
-    await db.syncState.put({ key: 'catalog', revision: 1, syncedRevision: 0 });
+    await markCatalogDirty(TEST_TYPE_ID);
     const s = engine();
     expect((await s.syncNow()).ok).toBe(true);
-    expect(s.getState().configConflict).toBeTruthy();
+    expect(s.getState().configConflicts).toEqual([{ typeId: TEST_TYPE_ID, fileId: f.id }]);
     expect(commandesRows()).toHaveLength(1);
     expect(fake.sheetTitles('pos-config')).toEqual(['Autre appareil']);
     expect(timers).toHaveLength(0);
+  });
+
+  test('a conflict on one type does not block the other types', async () => {
+    fake.seedConfig([{ title: 'Autre appareil', rows: [['ID']] }]);
+    const loto = await createEventType('Loto');
+    await addCategory(loto.id, 'Cartons');
+    await markCatalogDirty(TEST_TYPE_ID);
+    const s = engine();
+    expect((await s.syncNow()).ok).toBe(true);
+    expect(s.getState().configConflicts.map((c) => c.typeId)).toEqual([TEST_TYPE_ID]);
+    expect(fake.sheetTitles('pos-config-Loto')).toEqual(['Cartons']);
+    expect(await dirtyItems()).toMatchObject({ catalogTypes: [TEST_TYPE_ID] });
+    s.clearConflict(TEST_TYPE_ID);
+    expect(s.getState().configConflicts).toEqual([]);
   });
 
   test('no account connected: nothing happens', async () => {
@@ -150,7 +166,7 @@ describe('sync engine', () => {
   });
 
   test('changes are debounced; concurrent requests share one pass', async () => {
-    const e = await startEvent({ startDate: '2026-11-21' });
+    const e = await startEvent({ typeId: TEST_TYPE_ID, startDate: '2026-11-21' });
     await recordOrder(e.id, [beer]);
     const s = engine();
     s.notifyChange();

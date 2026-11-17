@@ -1,5 +1,5 @@
-import { db, newId } from '../db/db';
-import { CATALOG_SYNC_KEY, replaceCatalog } from '../db/catalog';
+import { catalogSyncKey, db, newId } from '../db/db';
+import { listCategories, listProducts, replaceCatalog } from '../db/catalog';
 import { baseSpreadsheetName, uniqueSpreadsheetName } from '../db/events';
 import { listOrders } from '../db/orders';
 import { fr } from '../i18n/fr';
@@ -7,6 +7,7 @@ import {
   ApiError,
   ConfigConflictError,
   appPropQuery,
+  type DriveFile,
   FOLDER_MIME,
   GoogleApi,
   sheetRange,
@@ -16,7 +17,7 @@ import {
   buildConfigTabs,
   buildEventSheets,
   parseConfigTabs,
-  type ImportResult,
+  type ImportProblem,
   type Tab,
 } from './sheets-layout';
 
@@ -44,13 +45,6 @@ async function ensureFolder(api: GoogleApi): Promise<string> {
     ).id;
   await db.syncState.put({ key: FOLDER_KEY, revision: 0, syncedRevision: 0, fileId: id });
   return id;
-}
-
-export async function findConfigFile(api: GoogleApi): Promise<string | null> {
-  const found = await api.listFiles(
-    `${appPropQuery('posApp', 'config')} and mimeType='${SPREADSHEET_MIME}' and trashed=false`,
-  );
-  return found[0]?.id ?? null;
 }
 
 async function createSpreadsheet(
@@ -134,27 +128,64 @@ function columnFormat(sheetId: number, col: number, numberFormat: object) {
   };
 }
 
-/* ---------------- pos-config ---------------- */
+/* ---------------- pos-config-<type> ---------------- */
 
-export async function syncCatalog(api: GoogleApi): Promise<string> {
-  const state = (await db.syncState.get(CATALOG_SYNC_KEY)) ?? {
-    key: CATALOG_SYNC_KEY,
-    revision: 0,
-    syncedRevision: 0,
-  };
+/** `pos-config-<type name>`. */
+export function configFileName(typeName: string): string {
+  return `${S.config}-${typeName}`;
+}
+
+/** Type name a configuration file stands for (legacy `pos-config` is the "Général" type). */
+export function typeNameOfConfigFile(fileName: string): string {
+  if (fileName === S.config) return fr.types.defaultName;
+  return fileName.startsWith(`${S.config}-`) ? fileName.slice(S.config.length + 1) : fileName;
+}
+
+const sameName = (a: string, b: string) => a.toLocaleLowerCase('fr') === b.toLocaleLowerCase('fr');
+
+async function listConfigFiles(api: GoogleApi): Promise<DriveFile[]> {
+  return api.listFiles(
+    `${appPropQuery('posApp', 'config')} and mimeType='${SPREADSHEET_MIME}' and trashed=false`,
+  );
+}
+
+async function typeCatalog(typeId: string) {
+  const categories = await listCategories(typeId);
+  const products = (await Promise.all(categories.map((c) => listProducts(c.id)))).flat();
+  return { categories, products };
+}
+
+/** Write one event type's configuration to its `pos-config-<name>` spreadsheet. */
+export async function syncCatalog(api: GoogleApi, typeId: string): Promise<string> {
+  const type = await db.eventTypes.get(typeId);
+  if (!type) throw new Error('Type d’évènement introuvable');
+  const key = catalogSyncKey(typeId);
+  const state = (await db.syncState.get(key)) ?? { key, revision: 0, syncedRevision: 0 };
   const captured = state.revision;
-  const [categories, products] = await Promise.all([
-    db.categories.toArray(),
-    db.products.toArray(),
-  ]);
+  const name = configFileName(type.name);
+  const { categories, products } = await typeCatalog(typeId);
 
   let id = state.fileId && (await exists(api, state.fileId)) ? state.fileId : null;
+  let created = false;
   if (!id) {
-    const found = await findConfigFile(api);
-    // Never silently overwrite a catalog written by another device.
-    if (found && !state.fileId) throw new ConfigConflictError(found);
-    id = found ?? (await createSpreadsheet(api, S.config, { posApp: 'config' }));
+    const configs = await listConfigFiles(api);
+    const mine = configs.find((f) => f.appProperties?.typeId === typeId);
+    const named = configs.find(
+      (f) =>
+        sameName(f.name, name) ||
+        (f.name === S.config && sameName(type.name, fr.types.defaultName)),
+    );
+    // Never silently overwrite a configuration written by another device.
+    if (!mine && named && !state.fileId) throw new ConfigConflictError(named.id, typeId);
+    id = mine?.id ?? named?.id ?? null;
+    if (!id) {
+      id = await createSpreadsheet(api, name, { posApp: 'config', typeId });
+      created = true;
+    }
   }
+  // Renamed type, migrated legacy file or adopted file: follow the type's name and id.
+  if (!created && state.syncedName !== name)
+    await api.updateFile(id, { name, appProperties: { posApp: 'config', typeId } });
 
   const tabs = buildConfigTabs(categories, products);
   // A spreadsheet needs at least one tab, even with an empty catalog.
@@ -173,59 +204,106 @@ export async function syncCatalog(api: GoogleApi): Promise<string> {
     ]),
   );
 
-  await db.transaction('rw', db.syncState, async () => {
-    const cur = (await db.syncState.get(CATALOG_SYNC_KEY)) ?? state;
+  const fileId = id;
+  await db.transaction('rw', db.syncState, db.eventTypes, async () => {
+    // Deleted while syncing: forget it.
+    if (!(await db.eventTypes.get(typeId))) return;
+    const cur = (await db.syncState.get(key)) ?? state;
     await db.syncState.put({
       ...cur,
-      fileId: id,
+      fileId,
+      syncedName: name,
       syncedRevision: Math.max(cur.syncedRevision, captured),
       lastSyncAt: Date.now(),
     });
   });
-  return id;
+  return fileId;
 }
 
-export async function importCatalog(api: GoogleApi): Promise<ImportResult | null> {
-  const id = await findConfigFile(api);
-  if (!id) return null;
-  const sheets = (await api.getSheets(id)).sort((a, b) => a.index - b.index);
-  const values = await api.readValues(
-    id,
-    sheets.map((s) => sheetRange(s.title, 'A1:F')),
+export interface CatalogImport {
+  /** Names of the event types imported, in file order. */
+  types: string[];
+  /** Number of products imported over all types. */
+  products: number;
+  problems: ImportProblem[];
+}
+
+/**
+ * Load every `pos-config-<type>` spreadsheet: each replaces the configuration of the
+ * matching type (by id, then by name), or creates the type. Types only on this device
+ * are kept. Returns null when the account has no configuration spreadsheet.
+ */
+export async function importCatalog(api: GoogleApi): Promise<CatalogImport | null> {
+  const files = (await listConfigFiles(api)).sort(
+    // Files already tied to a type first, so they win over a same-name legacy file.
+    (a, b) =>
+      Number(!a.appProperties?.typeId) - Number(!b.appProperties?.typeId) ||
+      a.name.localeCompare(b.name, 'fr'),
   );
-  const result = parseConfigTabs(
-    sheets.map((s, i) => ({ title: s.title, rows: values[i] ?? [] })),
-    newId,
-  );
-  await replaceCatalog(result.categories, result.products);
-  // The device now matches pos-config: nothing to push back.
-  await db.transaction('rw', db.syncState, async () => {
-    const cur = (await db.syncState.get(CATALOG_SYNC_KEY)) ?? {
-      key: CATALOG_SYNC_KEY,
-      revision: 0,
-      syncedRevision: 0,
-    };
-    await db.syncState.put({
-      ...cur,
-      fileId: id,
-      syncedRevision: cur.revision,
-      lastSyncAt: Date.now(),
+  if (files.length === 0) return null;
+  const summary: CatalogImport = { types: [], products: 0, problems: [] };
+  const claimed = new Set<string>();
+
+  for (const file of files) {
+    const types = await db.eventTypes.toArray();
+    const typeName = typeNameOfConfigFile(file.name);
+    let type =
+      types.find((t) => t.id === file.appProperties?.typeId) ??
+      types.find((t) => sameName(t.name, typeName));
+    if (type && claimed.has(type.id)) continue;
+    if (!type) {
+      type = { id: file.appProperties?.typeId ?? newId(), name: typeName, createdAt: Date.now() };
+      await db.eventTypes.add(type);
+    }
+    claimed.add(type.id);
+
+    const sheets = (await api.getSheets(file.id)).sort((a, b) => a.index - b.index);
+    const values = await api.readValues(
+      file.id,
+      sheets.map((sh) => sheetRange(sh.title, 'A1:F')),
+    );
+    const result = parseConfigTabs(
+      sheets.map((sh, i) => ({ title: sh.title, rows: values[i] ?? [] })),
+      newId,
+      type.id,
+    );
+    await replaceCatalog(type.id, result.categories, result.products);
+
+    // The device now matches the spreadsheet: nothing to push back, unless the
+    // file must be renamed after its type (e.g. legacy `pos-config`).
+    const key = catalogSyncKey(type.id);
+    const upToDate = file.name === configFileName(type.name);
+    await db.transaction('rw', db.syncState, async () => {
+      const cur = (await db.syncState.get(key)) ?? { key, revision: 0, syncedRevision: 0 };
+      const revision = upToDate ? cur.revision : Math.max(cur.revision, cur.syncedRevision + 1);
+      await db.syncState.put({
+        ...cur,
+        fileId: file.id,
+        syncedName: file.name,
+        revision,
+        syncedRevision: upToDate ? revision : cur.syncedRevision,
+        lastSyncAt: Date.now(),
+      });
     });
-  });
-  return result;
+
+    summary.types.push(type.name);
+    summary.products += result.products.length;
+    summary.problems.push(
+      ...result.problems.map((p) => ({ ...p, sheet: `${file.name} › ${p.sheet}` })),
+    );
+  }
+  return summary;
 }
 
-/** The user chose to replace the existing pos-config with this device's catalog. */
-export async function adoptConfigFile(fileId: string) {
+/** The user chose to replace an existing configuration spreadsheet with this device's. */
+export async function adoptConfigFile(typeId: string, fileId: string) {
+  const key = catalogSyncKey(typeId);
   await db.transaction('rw', db.syncState, async () => {
-    const cur = (await db.syncState.get(CATALOG_SYNC_KEY)) ?? {
-      key: CATALOG_SYNC_KEY,
-      revision: 0,
-      syncedRevision: 0,
-    };
+    const cur = (await db.syncState.get(key)) ?? { key, revision: 0, syncedRevision: 0 };
     await db.syncState.put({
       ...cur,
       fileId,
+      syncedName: undefined,
       revision: Math.max(cur.revision, cur.syncedRevision + 1),
     });
   });
@@ -290,7 +368,14 @@ export async function syncEvent(api: GoogleApi, eventId: string): Promise<string
 
 /** Things that still need to be written to Drive. */
 export async function dirtyItems() {
-  const catalog = await db.syncState.get(CATALOG_SYNC_KEY);
+  const types = await db.eventTypes.toArray();
+  const states = await db.syncState.bulkGet(types.map((t) => catalogSyncKey(t.id)));
+  const catalogTypes = types
+    .filter((_, i) => {
+      const st = states[i];
+      return !!st && st.revision > st.syncedRevision;
+    })
+    .map((t) => t.id);
   const events = (await db.events.toArray()).filter((e) => e.revision > e.syncedRevision);
-  return { catalog: !!catalog && catalog.revision > catalog.syncedRevision, events };
+  return { catalogTypes, events };
 }

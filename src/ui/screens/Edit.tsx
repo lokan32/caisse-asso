@@ -4,11 +4,15 @@ import { Icon } from '../Icon';
 import { Layout } from '../Layout';
 import { useLiveQuery, useSettings } from '../hooks';
 import { db } from '../../db/db';
-import type { Category, Product } from '../../db/types';
+import type { Category, EventType, Product } from '../../db/types';
+import { defaultTypeId, listEventTypes } from '../../db/event-types';
+import { navigate, useRoute } from '../router';
+import { useActiveEvent } from '../useActiveEvent';
 import {
   addCategory,
   addProduct,
   deleteCategory,
+  listCategories,
   deleteProduct,
   moveCategory,
   moveProduct,
@@ -21,11 +25,21 @@ import { Dialog, confirmDialog } from '../components';
 import { PALETTE, DEFAULT_COLOR } from '../../lib/colors';
 import { centsToInput, parseAmount } from '../../lib/money';
 
+/** Type being edited: `?type=` in the route, else the active event's type, else the default type. */
+function useEditedType(): string | null {
+  const route = useRoute();
+  const active = useActiveEvent();
+  const fallback = useLiveQuery(defaultTypeId, [], null as string | null);
+  return route.query.get('type') ?? (active ? active.typeId : fallback);
+}
+
 export function EditScreen() {
   const settings = useSettings();
+  const typeId = useEditedType();
+  const types = useLiveQuery(listEventTypes, [], [] as EventType[]);
   const categories = useLiveQuery(
-    () => db.categories.orderBy('position').toArray(),
-    [],
+    () => (typeId ? listCategories(typeId) : []),
+    [typeId],
     [] as Category[],
   );
   const [selected, setSelected] = useState<string | null>(null);
@@ -62,6 +76,21 @@ export function EditScreen() {
 
   return (
     <Layout title={fr.edit.title}>
+      <div class="field">
+        <label for="edit-type">{fr.types.type}</label>
+        <select
+          id="edit-type"
+          value={typeId ?? ''}
+          onChange={(e) => navigate(`/edit?type=${e.currentTarget.value}`)}
+          data-testid="edit-type"
+        >
+          {types.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.name}
+            </option>
+          ))}
+        </select>
+      </div>
       <CategoryTabs
         categories={categories}
         selected={selected}
@@ -147,7 +176,7 @@ export function EditScreen() {
           onClose={() => setCategoryDialog(null)}
           onSave={async (name) => {
             if (categoryDialog === 'rename' && category) await renameCategory(category.id, name);
-            else setSelected((await addCategory(name)).id);
+            else if (typeId) setSelected((await addCategory(typeId, name)).id);
             setCategoryDialog(null);
           }}
         />

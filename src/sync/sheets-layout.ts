@@ -78,14 +78,14 @@ function toCents(v: CellValue | undefined): number | null {
 /**
  * Parse pos-config tabs (rows include the header). Invalid rows are skipped and reported.
  */
-export function parseConfigTabs(tabs: Tab[], newId: () => string): ImportResult {
+export function parseConfigTabs(tabs: Tab[], newId: () => string, typeId: string): ImportResult {
   const categories: Category[] = [];
   const products: Product[] = [];
   const problems: ImportProblem[] = [];
   const seenIds = new Set<string>();
 
   tabs.forEach((tab, ci) => {
-    const category: Category = { id: newId(), name: tab.title, position: ci + 1 };
+    const category: Category = { id: newId(), typeId, name: tab.title, position: ci + 1 };
     categories.push(category);
     const parsed: Product[] = [];
     tab.rows.slice(1).forEach((row, i) => {

@@ -64,10 +64,10 @@ export async function importCatalogNow() {
   return result;
 }
 
-/** Overwrite the existing pos-config with this device's catalog (explicit user choice). */
-export async function replaceRemoteCatalog(fileId: string) {
-  await adoptConfigFile(fileId);
-  sync.clearConflict();
+/** Overwrite an existing pos-config-<type> with this device's configuration (explicit user choice). */
+export async function replaceRemoteCatalog(typeId: string, fileId: string) {
+  await adoptConfigFile(typeId, fileId);
+  sync.clearConflict(typeId);
   return syncWithReconnect();
 }
 

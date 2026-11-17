@@ -1,24 +1,23 @@
-import { db, newId } from './db';
+import { catalogSyncKey, db, newId } from './db';
 import type { Category, Product } from './types';
 import { DEFAULT_COLOR } from '../lib/colors';
 import { fr } from '../i18n/fr';
 
-export const CATALOG_SYNC_KEY = 'catalog';
-
-/** Record that the catalog changed and must be written to pos-config. */
-export async function markCatalogDirty() {
+/** Record that a type's configuration changed and must be written to its spreadsheet. */
+export async function markCatalogDirty(typeId: string) {
+  const key = catalogSyncKey(typeId);
   await db.transaction('rw', db.syncState, async () => {
-    const s = (await db.syncState.get(CATALOG_SYNC_KEY)) ?? {
-      key: CATALOG_SYNC_KEY,
-      revision: 0,
-      syncedRevision: 0,
-    };
+    const s = (await db.syncState.get(key)) ?? { key, revision: 0, syncedRevision: 0 };
     await db.syncState.put({ ...s, revision: s.revision + 1 });
   });
 }
 
-export async function listCategories(): Promise<Category[]> {
-  return db.categories.orderBy('position').toArray();
+/** Categories of one event type, in order. */
+export async function listCategories(typeId: string): Promise<Category[]> {
+  return db.categories
+    .where('[typeId+position]')
+    .between([typeId, -Infinity], [typeId, Infinity])
+    .toArray();
 }
 
 export async function listProducts(categoryId: string): Promise<Product[]> {
@@ -28,16 +27,24 @@ export async function listProducts(categoryId: string): Promise<Product[]> {
     .toArray();
 }
 
-export async function addCategory(name: string): Promise<Category> {
+/** Event type owning a product (through its category). */
+async function typeOfCategory(categoryId: string): Promise<string> {
+  const c = await db.categories.get(categoryId);
+  if (!c) throw new Error('Catégorie introuvable');
+  return c.typeId;
+}
+
+export async function addCategory(typeId: string, name: string): Promise<Category> {
   const trimmed = name.trim();
   if (!trimmed) throw new Error(fr.edit.nameRequired);
   const cat = await db.transaction('rw', db.categories, async () => {
-    const last = await db.categories.orderBy('position').last();
-    const c: Category = { id: newId(), name: trimmed, position: (last?.position ?? 0) + 1 };
+    const existing = await listCategories(typeId);
+    const last = existing[existing.length - 1];
+    const c: Category = { id: newId(), typeId, name: trimmed, position: (last?.position ?? 0) + 1 };
     await db.categories.add(c);
     return c;
   });
-  await markCatalogDirty();
+  await markCatalogDirty(typeId);
   return cat;
 }
 
@@ -45,31 +52,33 @@ export async function renameCategory(id: string, name: string) {
   const trimmed = name.trim();
   if (!trimmed) throw new Error(fr.edit.nameRequired);
   await db.categories.update(id, { name: trimmed });
-  await markCatalogDirty();
+  await markCatalogDirty(await typeOfCategory(id));
 }
 
-/** Move a category one step earlier (-1) or later (+1). */
+/** Move a category one step earlier (-1) or later (+1) within its type. */
 export async function moveCategory(id: string, delta: -1 | 1) {
+  const typeId = await typeOfCategory(id);
   await db.transaction('rw', db.categories, async () => {
-    const cats = await db.categories.orderBy('position').toArray();
+    const cats = await listCategories(typeId);
     const i = cats.findIndex((c) => c.id === id);
     const j = i + delta;
     if (i < 0 || j < 0 || j >= cats.length) return;
     [cats[i], cats[j]] = [cats[j], cats[i]];
     await Promise.all(cats.map((c, k) => db.categories.update(c.id, { position: k + 1 })));
   });
-  await markCatalogDirty();
+  await markCatalogDirty(typeId);
 }
 
 /** Delete a category and all its products (callers confirm first when non-empty). */
 export async function deleteCategory(id: string) {
+  const typeId = await typeOfCategory(id);
   await db.transaction('rw', db.categories, db.products, async () => {
     await db.products.where({ categoryId: id }).delete();
     await db.categories.delete(id);
-    const cats = await db.categories.orderBy('position').toArray();
+    const cats = await listCategories(typeId);
     await Promise.all(cats.map((c, k) => db.categories.update(c.id, { position: k + 1 })));
   });
-  await markCatalogDirty();
+  await markCatalogDirty(typeId);
 }
 
 export interface ProductInput {
@@ -114,7 +123,7 @@ export async function addProduct(input: ProductInput): Promise<Product> {
     await db.products.add(p);
     return p;
   });
-  await markCatalogDirty();
+  await markCatalogDirty(await typeOfCategory(input.categoryId));
   return product;
 }
 
@@ -134,30 +143,30 @@ export async function updateProduct(id: string, patch: Partial<Omit<Product, 'id
       await db.products.put({ ...next, position: current.position });
     }
   });
-  await markCatalogDirty();
+  await markCatalogDirty(await typeOfCategory(current.categoryId));
 }
 
 export async function deleteProduct(id: string) {
+  const p = await db.products.get(id);
+  if (!p) return;
   await db.transaction('rw', db.products, async () => {
-    const p = await db.products.get(id);
-    if (!p) return;
     await db.products.delete(id);
     await renumber(p.categoryId);
   });
-  await markCatalogDirty();
+  await markCatalogDirty(await typeOfCategory(p.categoryId));
 }
 
 /** Move a product to a 1-based position in its category, shifting the others. */
 export async function moveProduct(id: string, newPosition: number) {
+  const p = await db.products.get(id);
+  if (!p) return;
   await db.transaction('rw', db.products, async () => {
-    const p = await db.products.get(id);
-    if (!p) return;
     const list = (await listProducts(p.categoryId)).filter((x) => x.id !== id);
     const index = Math.max(0, Math.min(list.length, newPosition - 1));
     list.splice(index, 0, p);
     await Promise.all(list.map((x, k) => db.products.update(x.id, { position: k + 1 })));
   });
-  await markCatalogDirty();
+  await markCatalogDirty(await typeOfCategory(p.categoryId));
 }
 
 async function renumber(categoryId: string) {
@@ -169,24 +178,48 @@ async function renumber(categoryId: string) {
   );
 }
 
-/** Replace the whole catalog (import from pos-config). */
-export async function replaceCatalog(categories: Category[], products: Product[]) {
+/** Replace one event type's configuration (import from its spreadsheet). */
+export async function replaceCatalog(typeId: string, categories: Category[], products: Product[]) {
   await db.transaction('rw', db.categories, db.products, async () => {
-    await db.products.clear();
-    await db.categories.clear();
-    await db.categories.bulkAdd(categories);
+    await deleteTypeCatalog(typeId);
+    await db.categories.bulkAdd(categories.map((c) => ({ ...c, typeId })));
     await db.products.bulkAdd(products);
   });
 }
 
-/** Example catalog on first launch so the grid isn't empty; the user can delete it. */
+/** Remove every category and product of a type (inside a caller's transaction). */
+export async function deleteTypeCatalog(typeId: string) {
+  const cats = await listCategories(typeId);
+  const ids = cats.map((c) => c.id);
+  await db.products.where('categoryId').anyOf(ids).delete();
+  await db.categories.bulkDelete(ids);
+}
+
+/** Copy every category and product of `fromTypeId` into `toTypeId`, with fresh ids. */
+export async function copyCatalog(fromTypeId: string, toTypeId: string) {
+  await db.transaction('rw', db.categories, db.products, async () => {
+    for (const c of await listCategories(fromTypeId)) {
+      const copy: Category = { ...c, id: newId(), typeId: toTypeId };
+      await db.categories.add(copy);
+      const products = await listProducts(c.id);
+      await db.products.bulkAdd(products.map((p) => ({ ...p, id: newId(), categoryId: copy.id })));
+    }
+  });
+}
+
+/**
+ * First launch: create the "Général" event type with an example catalog so the grid
+ * isn't empty; the user can change or delete it.
+ */
 export async function seedIfEmpty(): Promise<boolean> {
   const seeded = await db.settings.get('seeded');
   if (seeded) return false;
   await db.settings.put({ key: 'seeded', value: true });
-  if ((await db.categories.count()) > 0) return false;
-  const drinks = await addCategory(fr.seed.drinks);
-  const food = await addCategory(fr.seed.food);
+  if ((await db.eventTypes.count()) > 0) return false;
+  const typeId = newId();
+  await db.eventTypes.add({ id: typeId, name: fr.types.defaultName, createdAt: Date.now() });
+  const drinks = await addCategory(typeId, fr.seed.drinks);
+  const food = await addCategory(typeId, fr.seed.food);
   const cats = [drinks, food];
   for (const p of fr.seed.products) {
     await addProduct({

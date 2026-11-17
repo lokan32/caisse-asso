@@ -1,5 +1,13 @@
+export interface EventType {
+  id: string;
+  name: string;
+  createdAt: number;
+}
+
 export interface Category {
   id: string;
+  /** Event type owning this category (and its products). */
+  typeId: string;
   name: string;
   position: number;
 }
@@ -18,6 +26,8 @@ export type EventStatus = 'open' | 'closed';
 
 export interface PosEvent {
   id: string;
+  /** Event type chosen at start; may point to a deleted type. */
+  typeId: string;
   /** Local date YYYY-MM-DD. */
   startDate: string;
   label: string;
@@ -72,5 +82,7 @@ export interface SyncState {
   revision: number;
   syncedRevision: number;
   fileId?: string;
+  /** Spreadsheet name last written to Drive (config spreadsheets). */
+  syncedName?: string;
   lastSyncAt?: number;
 }

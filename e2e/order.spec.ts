@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { selectCategory, setChangeStep, startEvent, tap } from './helpers';
+import { createType, selectCategory, setChangeStep, setPrice, startEvent, tap } from './helpers';
 
 test.beforeEach(async ({ page }) => {
   await startEvent(page);
@@ -83,4 +83,30 @@ test('orders are recorded offline', async ({ page, context }) => {
     await expect(page.getByTestId('toast')).toHaveText(`Commande n°${i} enregistrée`);
   }
   await context.setOffline(false);
+});
+
+test.describe('buttons depend on the event type', () => {
+  test('type-only product and type-specific price', async ({ page }) => {
+    await createType(page, 'Kermesse', 'Général');
+    await setPrice(page, 'Kermesse', 'Café', '2');
+    await page.getByRole('tab', { name: 'Nourriture' }).click();
+    await page.getByTestId('add-product').click();
+    await page.getByLabel('Nom', { exact: true }).fill('Barbe à papa');
+    await page.getByLabel('Prix de vente').fill('3');
+    await page.getByTestId('save-product').click();
+    await expect(page.getByTestId('product-dialog')).toHaveCount(0);
+
+    // Active event is of type "Général" (beforeEach).
+    await page.goto('/#/order');
+    await selectCategory(page, 'Nourriture');
+    await expect(page.getByTestId('product-Barbe à papa')).toHaveCount(0);
+
+    await startEvent(page, { type: 'Kermesse', switching: true });
+    await page.goto('/#/order');
+    await selectCategory(page, 'Nourriture');
+    await expect(page.getByTestId('product-Barbe à papa')).toBeVisible();
+    await selectCategory(page, 'Boissons');
+    await tap(page, 'Café');
+    await expect(page.getByTestId('order-total')).toHaveText('2,00 €');
+  });
 });

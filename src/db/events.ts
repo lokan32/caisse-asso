@@ -2,6 +2,7 @@ import { db, newId } from './db';
 import type { PosEvent } from './types';
 import { getSettings, setSetting } from './settings';
 import { formatIsoDate, isoDate } from '../lib/dates';
+import { fr } from '../i18n/fr';
 
 export class EventClosedError extends Error {
   constructor() {
@@ -10,17 +11,20 @@ export class EventClosedError extends Error {
 }
 
 export interface StartEventInput {
+  typeId: string;
   startDate?: string;
   label?: string;
   floatCents?: number;
 }
 
 /** Start a new event and make it the active one. Any previous active event stays open. */
-export async function startEvent(input: StartEventInput = {}): Promise<PosEvent> {
+export async function startEvent(input: StartEventInput): Promise<PosEvent> {
   const startDate = input.startDate ?? isoDate();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate)) throw new Error('Date invalide');
+  if (!input.typeId || !(await db.eventTypes.get(input.typeId))) throw new Error(fr.types.required);
   const event: PosEvent = {
     id: newId(),
+    typeId: input.typeId,
     startDate,
     label: (input.label ?? '').trim(),
     floatCents: input.floatCents ?? 0,

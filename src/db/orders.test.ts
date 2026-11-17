@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from 'vitest';
-import { freshDb } from './testing';
+import { TEST_TYPE_ID, freshDb } from './testing';
 import { startEvent, closeEvent } from './events';
 import {
   adjustReceived,
@@ -44,7 +44,7 @@ beforeEach(async () => {
 
 describe('orders', () => {
   test('stored record has snapshot lines, sequence number and totals', async () => {
-    const e = await startEvent({ startDate: '2026-11-21' });
+    const e = await startEvent({ typeId: TEST_TYPE_ID, startDate: '2026-11-21' });
     const o1 = await recordOrder(e.id, [beer(2), chips(1), coffee(0)], 1000);
     const o2 = await recordOrder(e.id, [beer(1)]);
     expect(o1).toMatchObject({
@@ -63,13 +63,13 @@ describe('orders', () => {
   });
 
   test('empty orders are refused', async () => {
-    const e = await startEvent();
+    const e = await startEvent({ typeId: TEST_TYPE_ID });
     await expect(recordOrder(e.id, [])).rejects.toBeInstanceOf(EmptyOrderError);
     await expect(recordOrder(e.id, [beer(0)])).rejects.toBeInstanceOf(EmptyOrderError);
   });
 
   test('closed events refuse new orders, edits and voids', async () => {
-    const e = await startEvent();
+    const e = await startEvent({ typeId: TEST_TYPE_ID });
     const o = await recordOrder(e.id, [beer(1)]);
     await closeEvent(e.id);
     await expect(recordOrder(e.id, [beer(1)])).rejects.toThrow();
@@ -78,7 +78,7 @@ describe('orders', () => {
   });
 
   test('editing keeps number, time and original prices', async () => {
-    const e = await startEvent();
+    const e = await startEvent({ typeId: TEST_TYPE_ID });
     await recordOrder(e.id, [beer(1)]);
     const o = await recordOrder(e.id, [beer(2), coffee(1, 150)], 1000);
     // Catalog price of coffee is now 2,00: the existing line keeps 1,50.
@@ -96,7 +96,7 @@ describe('orders', () => {
   });
 
   test('edits cannot empty an order or touch voided orders', async () => {
-    const e = await startEvent();
+    const e = await startEvent({ typeId: TEST_TYPE_ID });
     const o = await recordOrder(e.id, [beer(1)]);
     await expect(editOrder(o.id, [beer(0)])).rejects.toBeInstanceOf(EmptyOrderError);
     await voidOrder(o.id);
@@ -105,7 +105,7 @@ describe('orders', () => {
   });
 
   test('pending counter follows revisions', async () => {
-    const e = await startEvent();
+    const e = await startEvent({ typeId: TEST_TYPE_ID });
     const o = await recordOrder(e.id, [beer(1)]);
     await recordOrder(e.id, [beer(1)]);
     let ev = (await db.events.get(e.id))!;

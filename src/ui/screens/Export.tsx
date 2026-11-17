@@ -12,11 +12,11 @@ import { spreadsheetUrl } from '../../sync/google-api';
 import { useGoogleAccount, usePending } from '../usePending';
 import { ConnectButton } from '../AccountSection';
 import { confirmDialog } from '../components';
-import { db } from '../../db/db';
-import { CATALOG_SYNC_KEY } from '../../db/catalog';
+import { catalogSyncKey, db } from '../../db/db';
 import { eventDisplayName, listEvents } from '../../db/events';
-import type { PosEvent } from '../../db/types';
-import type { ImportResult } from '../../sync/sheets-layout';
+import { listEventTypes, typeName } from '../../db/event-types';
+import type { EventType, PosEvent } from '../../db/types';
+import { configFileName, type CatalogImport } from '../../sync/sync-ops';
 import { formatDateTime } from '../../lib/dates';
 import type { SyncResult } from '../../sync/engine';
 
@@ -43,11 +43,24 @@ export function ExportScreen() {
   const settings = useSettings();
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<SyncResult | null>(null);
-  const [imported, setImported] = useState<ImportResult | 'not-found' | null>(null);
+  const [imported, setImported] = useState<CatalogImport | 'not-found' | null>(null);
   const [importError, setImportError] = useState('');
 
   const events = useLiveQuery(listEvents, [], [] as PosEvent[]);
-  const config = useLiveQuery(() => db.syncState.get(CATALOG_SYNC_KEY), [], undefined);
+  const types = useLiveQuery(listEventTypes, [], [] as EventType[]);
+  // Configuration spreadsheets already written, one per event type.
+  const configs = useLiveQuery(
+    async () => {
+      const all = await listEventTypes();
+      const states = await db.syncState.bulkGet(all.map((t) => catalogSyncKey(t.id)));
+      return all.flatMap((t, i) => {
+        const fileId = states[i]?.fileId;
+        return fileId ? [{ type: t, fileId }] : [];
+      });
+    },
+    [],
+    [] as { type: EventType; fileId: string }[],
+  );
   const sheetEvent =
     events.find((e) => e.id === settings.activeEventId && e.spreadsheetId) ??
     events.find((e) => e.spreadsheetId);
@@ -126,38 +139,40 @@ export function ExportScreen() {
         )}
       </section>
 
-      {state.configConflict && (
-        <section class="banner warning" data-testid="config-conflict">
-          <p style={{ marginTop: 0 }}>{fr.exportScreen.conflict}</p>
-          <div class="row">
-            <button class="btn primary" onClick={doImport} disabled={busy}>
-              {fr.exportScreen.importCatalog}
-            </button>
-            <button
-              class="btn danger"
-              disabled={busy}
-              data-testid="replace-remote"
-              onClick={async () => {
-                if (
-                  !state.configConflict ||
-                  !(await confirmDialog(fr.exportScreen.replaceConfirm, { danger: true }))
-                )
-                  return;
-                setBusy(true);
-                try {
-                  setResult(await replaceRemoteCatalog(state.configConflict));
-                } finally {
-                  setBusy(false);
-                }
-              }}
-            >
-              {fr.exportScreen.replaceRemote}
-            </button>
-          </div>
-        </section>
-      )}
+      {state.configConflicts.map((c) => {
+        const file = configFileName(typeName(types, c.typeId));
+        return (
+          <section key={c.typeId} class="banner warning" data-testid="config-conflict">
+            <p style={{ marginTop: 0 }}>{fr.exportScreen.conflict(file)}</p>
+            <div class="row">
+              <button class="btn primary" onClick={doImport} disabled={busy}>
+                {fr.exportScreen.importCatalog}
+              </button>
+              <button
+                class="btn danger"
+                disabled={busy}
+                data-testid="replace-remote"
+                onClick={async () => {
+                  if (
+                    !(await confirmDialog(fr.exportScreen.replaceConfirm(file), { danger: true }))
+                  )
+                    return;
+                  setBusy(true);
+                  try {
+                    setResult(await replaceRemoteCatalog(c.typeId, c.fileId));
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                {fr.exportScreen.replaceRemote(file)}
+              </button>
+            </div>
+          </section>
+        );
+      })}
 
-      {(sheetEvent || config?.fileId) && (
+      {(sheetEvent || configs.length > 0) && (
         <section class="card">
           {sheetEvent?.spreadsheetId && (
             <p>
@@ -172,18 +187,18 @@ export function ExportScreen() {
               </a>
             </p>
           )}
-          {config?.fileId && (
-            <p>
+          {configs.map(({ type, fileId }) => (
+            <p key={type.id}>
               <a
-                href={spreadsheetUrl(config.fileId)}
+                href={spreadsheetUrl(fileId)}
                 target="_blank"
                 rel="noopener"
                 data-testid="config-link"
               >
-                {fr.exportScreen.openConfig}
+                {fr.exportScreen.openConfig(configFileName(type.name))}
               </a>
             </p>
-          )}
+          ))}
         </section>
       )}
 
@@ -200,7 +215,8 @@ export function ExportScreen() {
           {imported === 'not-found' && <p class="banner warning">{fr.exportScreen.notFound}</p>}
           {imported && imported !== 'not-found' && (
             <div class="banner success" data-testid="import-result" style={{ marginTop: '12px' }}>
-              {fr.exportScreen.imported(imported.products.length)}
+              {fr.exportScreen.imported(imported.products)}
+              <div>{fr.exportScreen.importedTypes(imported.types)}</div>
               {imported.problems.length > 0 && (
                 <>
                   <div>

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from 'vitest';
-import { freshDb } from './testing';
+import { TEST_TYPE_ID, freshDb } from './testing';
 import {
   activateEvent,
   closeEvent,
@@ -22,6 +22,7 @@ describe('events', () => {
 
   test('start makes the event active', async () => {
     const e = await startEvent({
+      typeId: TEST_TYPE_ID,
       startDate: '2026-11-21',
       label: 'Christmas market',
       floatCents: 5000,
@@ -39,28 +40,36 @@ describe('events', () => {
   });
 
   test('starting another event keeps the previous one open but inactive', async () => {
-    const a = await startEvent({ startDate: '2026-11-21' });
-    const b = await startEvent({ startDate: '2026-11-22' });
+    const a = await startEvent({ typeId: TEST_TYPE_ID, startDate: '2026-11-21' });
+    const b = await startEvent({ typeId: TEST_TYPE_ID, startDate: '2026-11-22' });
     expect((await getActiveEvent())?.id).toBe(b.id);
     expect((await db.events.get(a.id))?.status).toBe('open');
     expect((await listEvents()).map((e) => e.id)).toEqual([b.id, a.id]);
   });
 
   test('switch back to an open event (multi-day)', async () => {
-    const a = await startEvent({ startDate: '2026-11-21' });
-    await startEvent({ startDate: '2026-11-22' });
+    const a = await startEvent({ typeId: TEST_TYPE_ID, startDate: '2026-11-21' });
+    await startEvent({ typeId: TEST_TYPE_ID, startDate: '2026-11-22' });
     await activateEvent(a.id);
     expect((await getActiveEvent())?.id).toBe(a.id);
   });
 
   test('closing makes it read-only and inactive, and needs a final sync', async () => {
-    const a = await startEvent({ startDate: '2026-11-21' });
+    const a = await startEvent({ typeId: TEST_TYPE_ID, startDate: '2026-11-21' });
     await closeEvent(a.id);
     const closed = await db.events.get(a.id);
     expect(closed?.status).toBe('closed');
     expect(closed!.revision).toBeGreaterThan(closed!.syncedRevision);
     expect(await getActiveEvent()).toBeNull();
     await expect(activateEvent(a.id)).rejects.toThrow();
+  });
+
+  test('an event type is mandatory and kept by the event', async () => {
+    await expect(startEvent({ typeId: '' })).rejects.toThrow("Choisissez un type d'évènement");
+    await expect(startEvent({ typeId: 'unknown' })).rejects.toThrow();
+    expect(await db.events.count()).toBe(0);
+    const e = await startEvent({ typeId: TEST_TYPE_ID });
+    expect((await db.events.get(e.id))?.typeId).toBe(TEST_TYPE_ID);
   });
 
   test('spreadsheet name gets a numeric suffix when taken', () => {

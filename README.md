@@ -8,13 +8,19 @@ the association's own **Google Drive** as its only storage. You don't need a ser
 
 - **Prendre une commande**: one tab per category, a grid of colored product buttons, the running total,
   cash received and change.
-- **Modifier les boutons**: categories and products (name, sale price, buy price, color, position).
+- **Types d'évènement**: each kind of event (Kermesse, Marché de Noël…) has its own buttons and prices.
+  A new type starts empty or as an independent copy of an existing type's buttons.
+- **Modifier les boutons**: categories and products (name, sale price, buy price, color, position) of one
+  event type (the active event's type by default).
 - **Historique des commandes**: list, details, **edit** an order (it keeps its number and time) or **void** it.
 - **Statistiques en direct**: revenue, orders, average basket, cost, margin, expected cash, per-product
   table and revenue per 30-minute slot. Computed on the device, instant, works offline.
-- **Évènements**: start (date, name, starting cash float), resume, close.
+- **Évènements**: start (event type, date, name, starting cash float), resume, close.
 - **Exporter**: Google sign-in and sync to Drive:
-  - `POS/pos-config`: one tab per category (`ID | Nom | Prix de vente | Prix d'achat | Couleur | Position`);
+  - `POS/pos-config-<type>`: one spreadsheet per event type (e.g. `pos-config-Kermesse`), one tab per
+    category (`ID | Nom | Prix de vente | Prix d'achat | Couleur | Position`). Renaming a type renames its
+    spreadsheet; deleting a type leaves its spreadsheet in Drive. An older `pos-config` becomes
+    `pos-config-Général`;
   - `POS/event-YYYY-MM-DD`: tab **Commandes** (one row per order) and tab **Synthèse** (per-product
     result, totals, margins). Ready to read at the end of the event, with no manual editing.
 

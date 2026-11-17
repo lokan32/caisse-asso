@@ -6,6 +6,7 @@ import { useActiveEvent } from '../useActiveEvent';
 import { NoEventPrompt } from '../NoEvent';
 import { useLiveQuery, useSettings } from '../hooks';
 import { db } from '../../db/db';
+import { listCategories } from '../../db/catalog';
 import type { Category, Order, Product } from '../../db/types';
 import { CategoryTabs, ProductButton } from '../ProductButton';
 import {
@@ -47,9 +48,14 @@ export function OrderScreen() {
     })();
   }, [editId]);
 
+  // Buttons of the event type: the edited order's event, else the active event.
+  const eventId = cart.editing?.eventId ?? event?.id ?? null;
   const categories = useLiveQuery(
-    () => db.categories.orderBy('position').toArray(),
-    [],
+    async () => {
+      const ev = eventId ? await db.events.get(eventId) : undefined;
+      return ev ? listCategories(ev.typeId) : [];
+    },
+    [eventId],
     [] as Category[],
   );
   useEffect(() => {

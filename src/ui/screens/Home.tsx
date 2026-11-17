@@ -4,8 +4,11 @@ import { eventDisplayName } from '../../db/events';
 import { useActiveEvent } from '../useActiveEvent';
 import { useEventStats } from '../useEventStats';
 import { useSettings } from '../hooks';
+import { typeName } from '../../db/event-types';
 import { formatMoney } from '../../lib/money';
 import { SyncIndicator } from '../SyncIndicator';
+import { useLiveQuery } from '../hooks';
+import { db } from '../../db/db';
 
 const entries = [
   { href: '#/order', label: fr.home.takeOrder, icon: 'cart', id: 'order' },
@@ -17,6 +20,11 @@ const entries = [
 
 export function HomeScreen() {
   const event = useActiveEvent();
+  const type = useLiveQuery(
+    async () => (event ? typeName(await db.eventTypes.toArray(), event.typeId) : ''),
+    [event?.typeId],
+    '',
+  );
   return (
     <div class="screen home">
       <header class="home-header">
@@ -28,6 +36,11 @@ export function HomeScreen() {
               ? `${fr.home.activeEvent} : ${eventDisplayName(event)}`
               : fr.home.noActiveEvent}
         </div>
+        {event && type && (
+          <div class="event-type muted" data-testid="active-event-type">
+            {fr.types.type} : {type}
+          </div>
+        )}
       </header>
       <main class="content">
         {event && <LiveSummary />}

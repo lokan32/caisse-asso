@@ -170,6 +170,27 @@ export const fr = {
     none: 'Aucun évènement.',
   },
 
+  types: {
+    defaultName: 'Général',
+    title: "Types d'évènement",
+    type: "Type d'évènement",
+    create: 'Nouveau type',
+    name: 'Nom du type',
+    source: 'Partir de',
+    empty: 'Configuration vide',
+    copyOf: (name: string) => `Configuration de « ${name} »`,
+    rename: 'Renommer',
+    deleted: 'Type supprimé',
+    duplicateName: 'Ce nom est déjà utilisé',
+    inUse: (name: string) =>
+      `Impossible de supprimer « ${name} » : un évènement ouvert utilise ce type. Clôturez-le d'abord.`,
+    lastType: 'Il faut garder au moins un type d’évènement.',
+    deleteConfirm: (name: string) =>
+      `Supprimer le type « ${name} » et ses boutons ? Les évènements clôturés restent consultables.`,
+    required: "Choisissez un type d'évènement",
+    created: (name: string) => `Type « ${name} » créé`,
+  },
+
   settings: {
     title: 'Paramètres',
     currency: 'Symbole monétaire',
@@ -187,16 +208,19 @@ export const fr = {
     error: 'Échec de la synchronisation',
     stillPending: (n: number) => `${n} élément(s) en attente`,
     openSheet: 'Ouvrir la feuille de l’évènement',
-    openConfig: 'Ouvrir pos-config',
-    importCatalog: 'Importer le catalogue depuis pos-config',
-    importConfirm: 'Remplacer le catalogue de cet appareil par celui de pos-config ?',
+    openConfig: (file: string) => `Ouvrir ${file}`,
+    importCatalog: 'Importer les boutons depuis Google Drive',
+    importConfirm:
+      'Remplacer les boutons des types d’évènement de cet appareil par ceux des fichiers pos-config du compte Google ?',
     imported: (n: number) => `${n} produit(s) importé(s)`,
+    importedTypes: (names: string[]) => `Types : ${names.join(', ')}`,
     skipped: 'Lignes ignorées',
     notFound: 'Aucun fichier pos-config trouvé dans ce compte.',
-    conflict:
-      'Un catalogue pos-config existe déjà dans ce compte Google. Il n’a pas été modifié. Voulez-vous l’importer sur cet appareil, ou le remplacer par le catalogue de cet appareil ?',
-    replaceRemote: 'Remplacer pos-config par ce catalogue',
-    replaceConfirm: 'Le catalogue de pos-config sera écrasé par celui de cet appareil. Continuer ?',
+    conflict: (file: string) =>
+      `Le fichier ${file} existe déjà dans ce compte Google. Il n’a pas été modifié. Voulez-vous l’importer sur cet appareil, ou le remplacer par les boutons de cet appareil ?`,
+    replaceRemote: (file: string) => `Remplacer ${file} par les boutons de cet appareil`,
+    replaceConfirm: (file: string) =>
+      `Les boutons de ${file} seront écrasés par ceux de cet appareil. Continuer ?`,
     overwriteNote:
       'Les feuilles des évènements sont régénérées à chaque synchronisation : les modifications faites à la main dans « Commandes » ou « Synthèse » ne sont pas conservées.',
     offline: 'Appareil hors ligne',
