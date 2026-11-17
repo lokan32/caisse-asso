@@ -61,9 +61,9 @@ The user SHALL be able to edit an order of an open event to fix a mistake: add, 
 When the change step is enabled and an edited order's total differs from its previous total, the app SHALL display the difference to collect from or give back to the customer before saving.
 
 #### Scenario: Customer owes more
-- **GIVEN** order #7 totaled 4.00 and was paid with 5.00
+- **GIVEN** order #7 totaled 4.00 and was paid with 5.00 (1.00 given back)
 - **WHEN** the user edits it to a total of 6.50
-- **THEN** the app shows 1.50 to collect and records 6.50 as amount received when saved
+- **THEN** the app shows 2.50 to collect and records 7.50 as amount received when saved, so the change given stays 1.00
 
 #### Scenario: Refund difference
 - **GIVEN** order #7 totaled 6.00
