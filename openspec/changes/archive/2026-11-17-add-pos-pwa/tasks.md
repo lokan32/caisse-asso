@@ -60,7 +60,7 @@
 
 ## 10. End-to-end verification
 
-- [ ] 10.1 Run a full event rehearsal on a real phone: start event with float, record ~30 orders partly offline, edit one, void one, check live stats, reconnect, close event; verify the event spreadsheet's Synthèse matches live stats exactly and no order is duplicated or missing
+- [x] 10.1 Run a full event rehearsal on a real phone: start event with float, record ~30 orders partly offline, edit one, void one, check live stats, reconnect, close event; verify the event spreadsheet's Synthèse matches live stats exactly and no order is duplicated or missing
 - [x] 10.2 Validate the change with `openspec validate add-pos-pwa --strict`; verify it passes
 
 ## Workflow follow-up
